@@ -1,5 +1,9 @@
 package net.mcarolan.generator
 
+
+import java.nio.file.{Files, Path, Paths}
+
+import scala.jdk.javaapi.CollectionConverters
 import scala.xml.{Elem, Node}
 
 /*
@@ -32,20 +36,15 @@ TODO:
     }
  */
 
-case class Generator(root: Elem) {
+trait Formatting {
+  def upperFirstLetter(s: String): String =
+    s.take(1).toUpperCase + s.drop(1)
 
-  lazy val domainTypes: Map[String, String] = (root \\ "domain").map { node =>
-    attributeValue(node, "name") -> attributeValue(node, "type")
-  }.toMap
+  def scalaClassName(s: String): String =
+    s.split("-").map(upperFirstLetter).mkString("")
 
-  def upperFirstLetter(string: String): String =
-    string.take(1).toUpperCase + string.drop(1)
-
-  def formatAsClassName(string: String): String =
-    string.split("-").map(upperFirstLetter).mkString("")
-
-  def formatAsFieldName(string: String): String = {
-    val parts = string.split("-")
+  def scalaFieldName(s: String): String = {
+    val parts = s.split("-")
     val result =
       parts.take(1).mkString("") + parts.drop(1).map(upperFirstLetter).mkString("")
 
@@ -54,6 +53,58 @@ case class Generator(root: Elem) {
     else
       result
   }
+}
+
+case class SpecField(name: String, resolvedType: String)
+case class SpecMethod(index: Int, name: String, fields: List[SpecField])
+case class SpecClass(index: Int, name: String, methods: List[SpecMethod])
+
+case class SpecReader(root: Elem) {
+  private def attributeValue(elem: Node, key: String): String =
+    elem.attribute(key).map(_.head.text).getOrElse {
+      throw new RuntimeException(s"$key not defined at $elem")
+    }
+
+  lazy val domainTypes: Map[String, String] = (root \\ "domain").map { node =>
+    attributeValue(node, "name") -> attributeValue(node, "type")
+  }.toMap
+
+  private def fieldFromNode(elem: Node): SpecField = {
+    val domainType = optionalAttributeValue(elem, "domain")
+    val `type` = optionalAttributeValue(elem, "type")
+    val resolvedType =
+      `type`.getOrElse {
+        domainTypes.getOrElse(domainType.get, throw new RuntimeException(s"No domain type ${domainType} defined"))
+      }
+    SpecField(
+      attributeValue(elem, "name"),
+      resolvedType
+    )
+  }
+
+  private def methodFromNode(elem: Node): SpecMethod =
+    SpecMethod(
+      attributeValue(elem, "index").toInt,
+      attributeValue(elem, "name"),
+      (elem \\ "field").map(fieldFromNode).toList
+    )
+
+  private def classFromNode(elem: Node): SpecClass = {
+    val className = attributeValue(elem, "name")
+    SpecClass(
+      attributeValue(elem, "index").toInt,
+      className,
+      (elem \\ "method").map(methodFromNode).toList
+    )
+  }
+
+  lazy val classes: List[SpecClass] = (root \\ "class").map(classFromNode).toList
+
+}
+
+case class Generator(specReader: SpecReader) extends Formatting {
+
+  private val basePackage = "net.mcarolan.amqpscodec"
 
   def fieldType(string: String): String =
     Map[String, String](
@@ -68,71 +119,40 @@ case class Generator(root: Elem) {
       "longlong" -> "AmqpLongLong"
     ).getOrElse(string, throw new RuntimeException(s"No type for ${string}"))
 
-  def attributeValue(elem: Node, key: String): String =
-    elem.attribute(key).map(_.head.text).getOrElse {
-      throw new RuntimeException(s"$key not defined at $elem")
-    }
-
-  def optionalAttributeValue(elem: Node, key: String): Option[String] =
-    elem.attribute(key).flatMap(_.headOption.map(_.text))
-
-  def defineFieldType(elem: Node): String = {
-    optionalAttributeValue(elem, "domain").map { domainType =>
-      domainTypes.getOrElse(domainType, throw new RuntimeException(s"No domain type ${domainType} defined"))
-    }
-      .orElse(optionalAttributeValue(elem, "type"))
-      .map(fieldType)
-      .getOrElse(s"cannot find a type attribute for ${elem}")
+  def defineField(specField: SpecField): String = {
+    s"      ${scalaFieldName(specField.name)}: ${fieldType(specField.resolvedType)}"
   }
 
-  def fieldName(elem: Node): String =
-    formatAsFieldName(attributeValue(elem, "name"))
-
-  def defineField(elem: Node): String =
-    s"      ${fieldName(elem)}: ${defineFieldType(elem)}"
-
-  def defineMethod(className: String)(elem: Node): String = {
-    val methodScalaName: String =
-      formatAsClassName(attributeValue(elem, "name"))
-
-    val fields = elem \\ "field"
-
+  def defineMethod(specMethod: SpecMethod): String = {
     s"""
-       |    case class ${methodScalaName}(
-       |${fields.map(defineField).mkString(",\n")}
-       |    ) extends Method {
-       |      override val classIndex: AmqpShort = ${className}.index
-       |      override val methodIndex: AmqpShort = ${methodScalaName}.index
-       |      override val argumentValues: List[AmqpType] = List(${fields.map(fieldName).mkString(", ")})
-       |    }
-       |    object ${methodScalaName} {
-       |      val index: AmqpShort = AmqpShort(${attributeValue(elem, "index")})
+       |    case class ${scalaClassName(specMethod.name)}(
+       |${specMethod.fields.map(defineField).mkString(",\n")}
+       |    ) extends Method
+       |    object ${scalaClassName(specMethod.name)} {
+       |      val index: AmqpShort = AmqpShort(${specMethod.index})
        |    }
        |""".stripMargin
   }
 
-  def defineClass(elem: Node): String = {
-    val classScalaName: String = upperFirstLetter(attributeValue(elem, "name"))
+  def defineClass(specClass: SpecClass): String = {
     s"""
-       |  case object ${classScalaName} {
-       |    val index: AmqpShort = AmqpShort(${attributeValue(elem, "index")})
-       |    sealed trait Method extends AmqpClasses.Method
-       |    ${(elem \\ "method").map(defineMethod(classScalaName)).mkString("")}
+       |  case object ${scalaClassName(specClass.name)} {
+       |    val index: AmqpShort = AmqpShort(${specClass.index})
+       |    sealed trait Method extends AmqpMethod
+       |    ${specClass.methods.map(defineMethod).mkString("")}
        |  }
        |""".stripMargin
   }
 
-  def defineClasses: String = {
-    s"""
-       |object AmqpClasses {
-       |
-       |  sealed trait Method {
-       |    val classIndex: AmqpShort
-       |    val methodIndex: AmqpShort
-       |    val argumentValues: List[AmqpType]
-       |  }
-       |  ${(root \\ "class").map(defineClass).mkString("")}
-       |}
-       |""".stripMargin
-  }
+  def defineClasses: String =
+      s"""package ${basePackage}
+         |
+         |import ${basePackage}.AmqpTypes._
+         |
+         |package object spec {
+         |
+         |  sealed trait AmqpMethod
+         |  ${specReader.classes.map(defineClass).mkString("")}
+         |}
+         |""".stripMargin
 }
