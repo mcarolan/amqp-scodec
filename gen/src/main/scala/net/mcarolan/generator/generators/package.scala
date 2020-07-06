@@ -23,6 +23,9 @@ package object generators {
       result
   }
 
+  def scalaPackageName(s: String): String =
+    s.split("-").mkString("")
+
   def scalaFieldType(resolvedType: String): String =
     Map[String, String](
       "octet" -> "AmqpByte",
