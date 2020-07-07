@@ -26,6 +26,10 @@ package object generators {
   def scalaPackageName(s: String): String =
     s.split("-").mkString("")
 
+
+  def isBooleanField(resolvedType: String): Boolean =
+    scalaFieldType(resolvedType) == "AmqpBoolean"
+
   def scalaFieldType(resolvedType: String): String =
     Map[String, String](
       "octet" -> "AmqpByte",

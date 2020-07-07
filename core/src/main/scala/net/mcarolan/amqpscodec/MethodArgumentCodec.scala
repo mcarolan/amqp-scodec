@@ -8,37 +8,6 @@ import scala.annotation.tailrec
 
 object MethodArgumentCodec {
 
-  val booleansEncoder: Encoder[NonEmptyList[Boolean]] = Encoder[NonEmptyList[Boolean]] { booleans: NonEmptyList[Boolean] =>
-    Attempt.successful(booleans.toList.grouped(8).toList.map { group =>
-      if (group.size == 8)
-        BitVector.bits(group)
-      else
-        BitVector.bits((1 to (8 - group.size)).map(_ => false) ++ group)
-    }.foldLeft(BitVector.empty)( (a, b) => b ++ a))
-  }
-
-  @tailrec
-  private def toBooleans(bitVector: BitVector, acc: Seq[Boolean]): Seq[Boolean] =
-    bitVector.headOption match {
-      case Some(value) =>
-        toBooleans(bitVector.tail, acc :+ value)
-      case None =>
-        acc
-    }
-
-  def booleansDecoder(n: Int): Decoder[Seq[Boolean]] = Decoder[Seq[Boolean]] { bv: BitVector =>
-    if (n == 0) {
-      Attempt.failure(Err.General("booleansDecoder with n = 0", List.empty))
-    }
-    else {
-      val bytesToTake = (n - 1) / 8 + 1
-      val bitsToTake = bytesToTake * 8
-      val bits = bv.take(bitsToTake)
-      Attempt.Successful(DecodeResult(
-        toBooleans(bits.takeRight(n), Seq.empty),
-        bv.drop(bitsToTake)))
-    }
-  }
 
 //  @tailrec
 //  private def encode(booleans: Option[NonEmptyList[AmqpTypes.AmqpBoolean]], remaining: Seq[AmqpTypes.AmqpType], accAttempt: Attempt[BitVector]): Attempt[BitVector] =

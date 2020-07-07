@@ -36,32 +36,58 @@ TODO:
  */
 case class CodecGenerator(specReader: SpecReader) {
 
-  private def forCompEntries(specMethod: SpecMethod): String =
-    specMethod.fields.map { field =>
-      s"          ${scalaFieldName(field.name)} <- ${scalaFieldType(field.resolvedType)}.codec.encode(value.${scalaFieldName(field.name)})"
-    }.mkString("\n")
+  private def sourceForNoArgMethod(specClass: SpecClass, specMethod: SpecMethod): String =
+    s"""package ${basePackage}.codecs.${scalaPackageName(specClass.name)}
+       |
+       |import scodec.{Attempt, DecodeResult, Decoder, Encoder}
+       |import ${basePackage}.spec.${scalaClassName(specClass.name)}
+       |import scodec.bits.BitVector
+       |
+       |object ${scalaClassName(specMethod.name)} {
+       |    val ${scalaClassName(specClass.name)}${scalaClassName(specMethod.name)}Encoder: Encoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] =
+       |      Encoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] { _: ${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)} => Attempt.successful(BitVector.empty) }
+       |    val ${scalaClassName(specClass.name)}${scalaClassName(specMethod.name)}Decoder: Decoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] =
+       |      Decoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] { bv: BitVector => Attempt.Successful(DecodeResult(${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}(), bv)) }
+       |}
+       |""".stripMargin
 
-  private def yieldEntries(specMethod: SpecMethod): String =
-    specMethod.fields.map(f => scalaFieldName(f.name)).mkString(" ++ ")
+  private def sourceForMethod(specClass: SpecClass, specMethod: SpecMethod): String = {
+    val generator = FieldsCodecGenerator(specMethod.fields)
+
+    s"""package ${basePackage}.codecs.${scalaPackageName(specClass.name)}
+       |
+       |import scodec.{Encoder, Decoder, DecodeResult}
+       |import ${basePackage}.spec.${scalaClassName(specClass.name)}
+       |import ${basePackage}.AmqpTypes._
+       |import scodec.bits.BitVector
+       |${if (generator.hasBooleanField) "import cats.data.NonEmptyList\n" else "" }
+       |object ${scalaClassName(specMethod.name)} {
+       |    val ${scalaClassName(specClass.name)}${scalaClassName(specMethod.name)}Encoder: Encoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] =
+       |      Encoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] { value: ${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)} =>
+       |        for {
+       |${generator.encoderForComp}
+       |        } yield ${generator.encoderYield}
+       |      }
+       |
+       |    val ${scalaClassName(specClass.name)}${scalaClassName(specMethod.name)}Decoder: Decoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] =
+       |      Decoder[${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}] { bv : BitVector =>
+       |        for {
+       |          ${generator.decoderForComp}
+       |        } yield ${generator.decoderYield(specClass, specMethod)}
+       |      }
+       |}
+       |""".stripMargin
+  }
 
   private def defineForMethod(base: Path, specClass: SpecClass)(specMethod: SpecMethod): Unit = {
     val file = base.resolve(s"${scalaClassName(specMethod.name)}.scala")
-    write(file,
-      s"""package ${basePackage}.codecs.${scalaPackageName(specClass.name)}
-         |
-         |import scodec.Encoder
-         |import ${basePackage}.spec.${scalaClassName(specClass.name)}.${scalaClassName(specMethod.name)}
-         |import ${basePackage}.AmqpTypes._
-         |
-         |object ${scalaClassName(specMethod.name)} {
-         |    val ${scalaClassName(specClass.name)}${scalaClassName(specMethod.name)}Encoder: Encoder[${scalaClassName(specMethod.name)}] =
-         |      Encoder[${scalaClassName(specMethod.name)}] { value: ${scalaClassName(specMethod.name)} =>
-         |        for {
-         |${forCompEntries(specMethod)}
-         |        } yield ${yieldEntries(specMethod)}
-         |      }
-         |}
-         |""".stripMargin)
+    val source =
+      if (specMethod.fields.isEmpty)
+        sourceForNoArgMethod(specClass, specMethod)
+      else
+        sourceForMethod(specClass, specMethod)
+
+    write(file, source)
   }
 
   private def classPackageObjectSource(specClass: SpecClass): String =

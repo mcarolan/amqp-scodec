@@ -1,14 +1,12 @@
 package net.mcarolan.amqpscodec.codecs.exchange
 
-import scodec.Encoder
-import net.mcarolan.amqpscodec.spec.Exchange.DeleteOk
-import net.mcarolan.amqpscodec.AmqpTypes._
+import scodec.{Attempt, DecodeResult, Decoder, Encoder}
+import net.mcarolan.amqpscodec.spec.Exchange
+import scodec.bits.BitVector
 
 object DeleteOk {
-    val ExchangeDeleteOkEncoder: Encoder[DeleteOk] =
-      Encoder[DeleteOk] { value: DeleteOk =>
-        for {
-
-        } yield 
-      }
+    val ExchangeDeleteOkEncoder: Encoder[Exchange.DeleteOk] =
+      Encoder[Exchange.DeleteOk] { _: Exchange.DeleteOk => Attempt.successful(BitVector.empty) }
+    val ExchangeDeleteOkDecoder: Decoder[Exchange.DeleteOk] =
+      Decoder[Exchange.DeleteOk] { bv: BitVector => Attempt.Successful(DecodeResult(Exchange.DeleteOk(), bv)) }
 }

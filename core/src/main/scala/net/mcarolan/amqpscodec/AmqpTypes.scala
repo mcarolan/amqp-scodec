@@ -1,8 +1,11 @@
 package net.mcarolan.amqpscodec
 
+import cats.data.NonEmptyList
 import scodec.bits.BitVector
-import scodec.{Attempt, Codec, Encoder}
+import scodec.{Attempt, Codec, DecodeResult, Decoder, Encoder, Err}
 import scodec.codecs._
+
+import scala.annotation.tailrec
 
 object AmqpTypes {
 
@@ -44,6 +47,45 @@ object AmqpTypes {
   }
 
   case class AmqpBoolean(value: Boolean) extends AmqpType
+  object AmqpBoolean {
+    val encoder: Encoder[NonEmptyList[AmqpBoolean]] = Encoder[NonEmptyList[AmqpBoolean]] { booleans: NonEmptyList[AmqpBoolean] =>
+      Attempt.successful(booleans.toList.grouped(8).toList.map { group =>
+        val groupBooleans = group.map(_.value)
+        if (group.size == 8)
+          BitVector.bits(groupBooleans)
+        else
+          BitVector.bits((1 to (8 - groupBooleans.size)).map(_ => false) ++ groupBooleans)
+      }.foldLeft(BitVector.empty)( (a, b) => b ++ a))
+    }
+
+    @tailrec
+    private def toBooleans(bitVector: BitVector, acc: Seq[Boolean]): Seq[Boolean] =
+      bitVector.headOption match {
+        case Some(value) =>
+          toBooleans(bitVector.tail, acc :+ value)
+        case None =>
+          acc
+      }
+
+    private def decoder(n: Int): Decoder[Seq[AmqpBoolean]] = Decoder[Seq[AmqpBoolean]] { bv: BitVector =>
+      val bytesToTake = (n - 1) / 8 + 1
+      val bitsToTake = bytesToTake * 8
+      val bits = bv.take(bitsToTake)
+
+      if (bits != bitsToTake)
+        Attempt.Failure(Err.insufficientBits(bitsToTake, bits.size))
+      else
+        Attempt.Successful(DecodeResult(
+          toBooleans(bits.takeRight(n), Seq.empty).map(AmqpBoolean.apply),
+          bv.drop(bitsToTake)))
+    }
+
+    val decoder1: Decoder[Seq[AmqpBoolean]] = decoder(1)
+    val decoder2: Decoder[Seq[AmqpBoolean]] = decoder(2)
+    val decoder3: Decoder[Seq[AmqpBoolean]] = decoder(3)
+    val decoder4: Decoder[Seq[AmqpBoolean]] = decoder(4)
+    val decoder5: Decoder[Seq[AmqpBoolean]] = decoder(5)
+  }
 
   class Table extends AmqpType
   object Table {
